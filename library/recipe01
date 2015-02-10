@@ -1,0 +1,7 @@
+#! /usr/bin/env lua
+
+local json = require "dromozoa.json"
+
+io.write(json.encode {
+  time = os.date "%Y-%m-%d %H:%M:%S";
+}, "\n")
