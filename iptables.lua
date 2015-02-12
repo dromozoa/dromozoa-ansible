@@ -1,12 +1,12 @@
 local json = require "dromozoa.json"
 local unpack = table.unpack
 
-local function scan(line)
+local function iptables_scan(line)
   local i = 1
   local _1
   local _2
 
-  local function m(pattern)
+  local function scan(pattern)
     local a, b, c, d = line:find("^" .. pattern, i)
     if b == nil then
       return false
@@ -18,30 +18,56 @@ local function scan(line)
     end
   end
 
-  if m "#%s*(.*)" then
+  if scan "#%s*(.*)" then
     return {
       line = line;
       mode = "comment";
       comment = _1;
     }
-  elseif m "%*([^%s]*)" then
+  elseif scan "%*([^%s]*)" then
     return {
       line = line;
       mode = "filter";
       filter = _1;
     }
-  elseif m "%:(.-) (.-) " then
+  elseif scan "%:(.-) (.-) " then
     return {
       line = line;
       mode = "policy";
       chain = _1;
       policy = _2;
     }
-  elseif m "%-A (.-) " then
+  elseif scan "%-A (.-) " then
     local chain = _1
+    local source
+    local destination
+    local in_interface
+    local out_interface
+    local protocol
+    while i <= #line do
+      local j = i
+      local invert = false
+      if scan "! " then
+        invert = true
+      end
+      if scan "%-s (.-) " then
+        source = { invert, _1 }
+      elseif scan "%-d (.-) " then
+        destination = { invert, _1 }
+      elseif scan "%-i (.-) " then
+        in_interface = { invert, _1 }
+      elseif scan "%-o (.-) " then
+        out_interface = { invert, _1 }
+      elseif scan "%-p (.-) " then
+        protocol = { invert, _1 }
+      else
+        i = j
+        break
+      end
+    end
     local append = {}
     while i <= #line do
-      if m "([^%s]+) " then
+      if scan "([^%s]+) " then
         append[#append + 1] = _1
       end
     end
@@ -49,9 +75,14 @@ local function scan(line)
       line = line;
       mode = "append";
       chain = chain;
+      source = source;
+      destination = destination;
+      in_interface = in_interface;
+      out_interface = out_interface;
+      protocol = protocol;
       append = append;
     }
-  elseif m "COMMIT" then
+  elseif scan "COMMIT" then
     return {
       line = line;
       mode = "commit";
@@ -61,15 +92,16 @@ local function scan(line)
   end
 end
 
-local function parse(handle)
-  local result = {}
+local function iptables_parse(handle)
+  local scanned = {}
   for i in io.lines() do
-    result[#result + 1] = scan(i)
+    scanned[#scanned + 1] = iptables_scan(i)
   end
+  print(json.encode(scanned))
 
   local chain = {}
-  for i = 1, #result do
-    local v = result[i]
+  for i = 1, #scanned do
+    local v = scanned[i]
     if v.mode == "policy" then
       chain[v.chain] = {
         policy = v.policy;
@@ -125,6 +157,10 @@ local function parse(handle)
   return chain
 end
 
+local result = iptables_parse(io.stdin)
+-- print(json.encode(result))
+
+--[[
 local result = parse(io.stdin)
 local function is_tcp_dport_accepted(chain, port)
   local append = result[chain].append
@@ -141,3 +177,4 @@ local function is_tcp_dport_accepted(chain, port)
 end
 
 print(is_tcp_dport_accepted("RH-Firewall-1-INPUT", tonumber(arg[1])))
+]]
