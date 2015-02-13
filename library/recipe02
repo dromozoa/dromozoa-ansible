@@ -1,0 +1,38 @@
+#! /opt/dromozoa/bin/lua
+
+local json = require "dromozoa.json"
+local shlex = require "dromozoa.shlex"
+
+local result, message = pcall(function ()
+  local path = arg[1]
+  local handle = assert(io.open(arg[1]))
+  local data = handle:read("*a")
+  assert(handle:close())
+
+  local list = shlex.split(data)
+  local map = {}
+  for i = 1, #list do
+    local k, v = list[i]:match("^([^=]+)=(.*)")
+    if k ~= nil then
+      map[k] = v
+    end
+  end
+
+  local log = assert(io.open("/tmp/recipe.log", "a"))
+  log:write(json.encode({ arg=arg, map = map }), "\n")
+  log:close()
+
+  io.write(json.encode {
+    time = os.date "%Y-%m-%d %H:%M:%S";
+    ansible_facts = {
+      dromozoa_test = "foo";
+    };
+  }, "\n")
+end)
+
+if not result then
+  io.write(json.encode {
+    failed = true;
+    msg = message;
+  }, "\n")
+end
