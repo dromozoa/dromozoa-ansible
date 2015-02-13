@@ -38,12 +38,11 @@ local function iptables_scan(line)
       policy = _2;
     }
   elseif scan "%-A (.-) " then
-    local chain = _1
-    local source
-    local destination
-    local in_interface
-    local out_interface
-    local protocol
+    local result = {
+      line = line;
+      mode = "append";
+      chain = _1;
+    }
     while i <= #line do
       local j = i
       local invert = false
@@ -51,37 +50,75 @@ local function iptables_scan(line)
         invert = true
       end
       if scan "%-s (.-) " then
-        source = { invert, _1 }
+        result.source = {
+          invert = invert;
+          address = _1;
+        }
       elseif scan "%-d (.-) " then
-        destination = { invert, _1 }
+        result.destination = {
+          invert = invert;
+          address = _1;
+        }
       elseif scan "%-i (.-) " then
-        in_interface = { invert, _1 }
+        result.in_interface = {
+          invert = invert;
+          interface = _1;
+        }
       elseif scan "%-o (.-) " then
-        out_interface = { invert, _1 }
+        result.out_interface = {
+          invert = invert;
+          interface = _1;
+        }
       elseif scan "%-p (.-) " then
-        protocol = { invert, _1 }
+        result.protocol = {
+          invert = invert;
+          protocol = _1;
+        }
       else
         i = j
         break
       end
     end
-    local append = {}
+    local rule = {}
     while i <= #line do
       if scan "([^%s]+) " then
-        append[#append + 1] = _1
+        rule[#rule + 1] = _1
       end
     end
-    return {
-      line = line;
-      mode = "append";
-      chain = chain;
-      source = source;
-      destination = destination;
-      in_interface = in_interface;
-      out_interface = out_interface;
-      protocol = protocol;
-      append = append;
-    }
+    for i = 1, #rule do
+      local a, b, c, d = unpack(rule, i, i + 3)
+      if a == "-j" then
+        result.jump = b
+      elseif a == "--reject-with" then
+        result.reject_with = b
+      elseif a == "-m" then
+        if b == "state" and c == "--state" then
+          result.match_state = {}
+          for j in d:gmatch("[^,]+") do
+            result.match_state[j] = true
+          end
+        elseif c == "--dport" then
+          local min, max = d:match("^(%d+):(%d+)$")
+          if min == nil then
+            local min = d:match("^%d+$")
+            if min == nil then
+              error "could not parse"
+            end
+            max = min
+          end
+          result.match_dport = {
+            name = b;
+            min = tonumber(min);
+            max = tonumber(max);
+          }
+        end
+      end
+    end
+    if rule[1] == "-j" then
+      result.jump_only = true
+    end
+    result.rule = rule
+    return result
   elseif scan "COMMIT" then
     return {
       line = line;
@@ -93,72 +130,32 @@ local function iptables_scan(line)
 end
 
 local function iptables_parse(handle)
-  local scanned = {}
+  local line = {}
   for i in io.lines() do
-    scanned[#scanned + 1] = iptables_scan(i)
+    line[#line + 1] = iptables_scan(i)
   end
-  print(json.encode(scanned))
 
-  local chain = {}
-  for i = 1, #scanned do
-    local v = scanned[i]
+  local result = {}
+  for i = 1, #line do
+    local v = line[i]
     if v.mode == "policy" then
-      chain[v.chain] = {
+      result[v.chain] = {
         policy = v.policy;
         append = {};
       }
     elseif v.mode == "append" then
-      local jump
-      local reject_with
-      local match
-      local match_state_new
-      local match_tcp_dport
-      local match_udp_dport
-      for j = 1, #v.append do
-        local a, b, c, d = unpack(v.append, j, j + 3)
-        if a == "-j" then
-          jump = b
-        elseif a == "--reject-with" then
-          reject_with = b
-        elseif a == "-m" then
-          match = true
-          if b == "state" and c == "--state" and d == "NEW" then
-            match_state_new = true
-          elseif c == "--dport" then
-            local min, max = d:match("^(%d+):(%d+)$")
-            if max == nil then
-              max = d:match("^%d+$")
-              if max == nil then
-                error "could not parse"
-              end
-              min = max
-            end
-            local min = tonumber(min)
-            local max = tonumber(max)
-            if b == "tcp" then
-              match_tcp_dport = { min, max }
-            elseif b == "udp" then
-              match_udp_dport = { min, max }
-            end
-          end
-        end
-      end
-      local append = chain[v.chain].append
-      append[#append + 1] = {
-        jump = jump;
-        match = match;
-        match_state_new = match_state_new;
-        match_tcp_dport = match_tcp_dport;
-        match_udp_dport = match_udp_dport;
-        reject_with = reject_with;
-      }
+      local append = result[v.chain].append
+      append[#append + 1] = v
     end
   end
-  return chain
+  return result
+end
+
+local function iptables_check_tcp_dport(data, dport)
 end
 
 local result = iptables_parse(io.stdin)
--- print(json.encode(result))
+print(json.encode(result))
 
 --[[
 local result = parse(io.stdin)
