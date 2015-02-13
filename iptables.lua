@@ -1,7 +1,7 @@
 local json = require "dromozoa.json"
 local unpack = table.unpack
 
-local function iptables_scan(line)
+local function iptables_parse_line(line)
   local i = 1
   local _1
   local _2
@@ -54,21 +54,25 @@ local function iptables_scan(line)
           invert = invert;
           address = _1;
         }
+        result.address_or_interface = true
       elseif scan "%-d (.-) " then
         result.destination = {
           invert = invert;
           address = _1;
         }
+        result.address_or_interface = true
       elseif scan "%-i (.-) " then
         result.in_interface = {
           invert = invert;
           interface = _1;
         }
+        result.address_or_interface = true
       elseif scan "%-o (.-) " then
         result.out_interface = {
           invert = invert;
           interface = _1;
         }
+        result.address_or_interface = true
       elseif scan "%-p (.-) " then
         result.protocol = {
           invert = invert;
@@ -79,6 +83,7 @@ local function iptables_scan(line)
         break
       end
     end
+
     local rule = {}
     while i <= #line do
       if scan "([^%s]+) " then
@@ -100,7 +105,7 @@ local function iptables_scan(line)
         elseif c == "--dport" then
           local min, max = d:match("^(%d+):(%d+)$")
           if min == nil then
-            local min = d:match("^%d+$")
+            min = d:match("^%d+$")
             if min == nil then
               error "could not parse"
             end
@@ -130,14 +135,9 @@ local function iptables_scan(line)
 end
 
 local function iptables_parse(handle)
-  local line = {}
-  for i in io.lines() do
-    line[#line + 1] = iptables_scan(i)
-  end
-
   local result = {}
-  for i = 1, #line do
-    local v = line[i]
+  for i in io.lines() do
+    local v = iptables_parse_line(i)
     if v.mode == "policy" then
       result[v.chain] = {
         policy = v.policy;
@@ -151,27 +151,39 @@ local function iptables_parse(handle)
   return result
 end
 
-local function iptables_check_tcp_dport(data, dport)
-end
-
-local result = iptables_parse(io.stdin)
-print(json.encode(result))
-
---[[
-local result = parse(io.stdin)
-local function is_tcp_dport_accepted(chain, port)
-  local append = result[chain].append
+local function iptables_evaluate(data, chain, protocol, port)
+  local append = data[chain].append
   for i = 1, #append do
     local v = append[i]
-    print(json.encode(v))
-    if v.match_tcp_dport then
-      if v.match_tcp_dport[1] <= port and port <= v.match_tcp_dport[2] then
-        return true
+    if v.address_or_interface == nil then
+      local pass = false
+      if v.protocol == nil then
+        pass = true
+      else
+        pass = v.protocol.protocol == protocol
+        if v.protocol.invert then
+          pass = not pass
+        end
+      end
+      if pass then
+        local pass = false
+        if v.match_dport ~= nil then
+          pass = v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max
+        elseif v.jump_only then
+          pass = true
+        end
+        if pass then
+          if data[v.jump] == nil then
+            return v.jump, chain, i
+          else
+            return iptables_evaluate(data, v.jump, protocol, port)
+          end
+        end
       end
     end
   end
-  return false
+  return data[chain].policy, chain, 0
 end
 
-print(is_tcp_dport_accepted("RH-Firewall-1-INPUT", tonumber(arg[1])))
-]]
+local data = iptables_parse(io.stdin)
+print(iptables_evaluate(data, arg[1], arg[2], tonumber(arg[3])))
