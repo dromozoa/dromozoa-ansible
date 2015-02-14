@@ -20,26 +20,22 @@ local function iptables_parse_line(line)
 
   if scan "#%s*(.*)" then
     return {
-      line = line;
       mode = "comment";
       comment = _1;
     }
   elseif scan "%*([^%s]*)" then
     return {
-      line = line;
       mode = "filter";
       filter = _1;
     }
   elseif scan "%:(.-) (.-) " then
     return {
-      line = line;
       mode = "policy";
       chain = _1;
       policy = _2;
     }
   elseif scan "%-A (.-) " then
     local result = {
-      line = line;
       mode = "append";
       chain = _1;
       address_or_interface = false;
@@ -85,14 +81,13 @@ local function iptables_parse_line(line)
         break
       end
     end
-
-    local args = {}
+    local t = {}
     for j in line:sub(i):gmatch("[^%s]+") do
-      args[#args + 1] = j
+      t[#t + 1] = j
     end
     result.match = false
-    for j = 1, #args do
-      local a, b, c, d = args[j], args[j + 1], args[j + 2], args[j + 3]
+    for j = 1, #t do
+      local a, b, c, d = t[j], t[j + 1], t[j + 2], t[j + 3]
       if a == "-j" then
         result.jump = b
       elseif a == "--reject-with" then
@@ -118,11 +113,9 @@ local function iptables_parse_line(line)
         end
       end
     end
-    result.args = args
     return result
   elseif scan "COMMIT" then
     return {
-      line = line;
       mode = "commit";
     }
   else
@@ -152,21 +145,22 @@ local function iptables_evaluate(data, chain, protocol, port)
   for i = 1, #t do
     local v = t[i]
     if not v.address_or_interface then
-      local pass = false
+      local pass
       if v.protocol == nil then
         pass = true
       else
-        pass = v.protocol.protocol == protocol
         if v.protocol.invert then
-          pass = not pass
+          pass = v.protocol.protocol ~= protocol
+        else
+          pass = v.protocol.protocol == protocol
         end
       end
       if pass then
-        local pass = false
-        if v.match_dport ~= nil then
+        local pass
+        if v.match_dport == nil then
+          pass = not v.match
+        else
           pass = v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max
-        elseif not v.match then
-          pass = true
         end
         if pass then
           if data[v.jump] == nil then
@@ -188,17 +182,17 @@ local function services_parse(handle)
     local a, b, service, port, protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
     if b ~= nil then
       local port = tonumber(port)
-      local t = { service }
+      local t1 = { service }
       for j in line:sub(b + 1):gmatch("[^%s]+") do
-        t[#t + 1] = j
+        t1[#t1 + 1] = j
       end
-      for j = 1, #t do
-        local v = t[j]
+      for j = 1, #t1 do
+        local v = t1[j]
         if result[v] == nil then
           result[v] = {}
         end
-        local t = result[v]
-        t[#t + 1] = {
+        local t2 = result[v]
+        t2[#t2 + 1] = {
           port = port;
           protocol = protocol;
         }
@@ -208,13 +202,15 @@ local function services_parse(handle)
   return result
 end
 
-local function string_to_boolean(v)
-  if v == "yes" or v == "on" or v == "1" or v == "true" then
-    return true
-  elseif v == "no" or v == "off" or v == "0" or v == "false" then
-    return false
-  else
-    return nil
+local string_to_boolean = {}
+do
+  local t = { "yes", "on", "1", "true" }
+  for i = 1, #t do
+    string_to_boolean[t[i]] = true
+  end
+  local t = { "no", "off", "0", "false" }
+  for i = 1, #t do
+    string_to_boolean[t[i]] = false
   end
 end
 
@@ -254,7 +250,7 @@ local result, message = pcall(function (filename)
       end
       port = tonumber(port)
     elseif k == "permanent" then
-      permanent = string_to_boolean(v)
+      permanent = string_to_boolean[v]
       if permanent == nil then
         error("bad argument " .. item)
       end
