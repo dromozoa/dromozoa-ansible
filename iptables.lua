@@ -1,8 +1,6 @@
 local json = require "dromozoa.json"
 local shlex = require "dromozoa.shlex"
 
-local unpack = table.unpack
-
 local function iptables_parse_line(line)
   local i = 1
   local _1
@@ -44,6 +42,8 @@ local function iptables_parse_line(line)
       line = line;
       mode = "append";
       chain = _1;
+      address_or_interface = false;
+      match = false;
     }
     while i <= #line do
       local j = i
@@ -86,14 +86,13 @@ local function iptables_parse_line(line)
       end
     end
 
-    local rule = {}
-    while i <= #line do
-      if scan "([^%s]+) " then
-        rule[#rule + 1] = _1
-      end
+    local args = {}
+    for j in line:sub(i):gmatch("[^%s]+") do
+      args[#args + 1] = j
     end
-    for i = 1, #rule do
-      local a, b, c, d = unpack(rule, i, i + 3)
+    result.match = false
+    for j = 1, #args do
+      local a, b, c, d = args[j], args[j + 1], args[j + 2], args[j + 3]
       if a == "-j" then
         result.jump = b
       elseif a == "--reject-with" then
@@ -101,10 +100,7 @@ local function iptables_parse_line(line)
       elseif a == "-m" then
         result.match = true
         if b == "state" and c == "--state" then
-          result.match_state = {}
-          for j in d:gmatch("[^,]+") do
-            result.match_state[j] = true
-          end
+          result.match_state = d
         elseif c == "--dport" then
           local min, max = d:match("^(%d+):(%d+)$")
           if min == nil then
@@ -122,7 +118,7 @@ local function iptables_parse_line(line)
         end
       end
     end
-    result.rule = rule
+    result.args = args
     return result
   elseif scan "COMMIT" then
     return {
@@ -130,7 +126,7 @@ local function iptables_parse_line(line)
       mode = "commit";
     }
   else
-    error "could not scan"
+    error "could not parse"
   end
 end
 
@@ -144,18 +140,18 @@ local function iptables_parse(handle)
         append = {};
       }
     elseif v.mode == "append" then
-      local append = result[v.chain].append
-      append[#append + 1] = v
+      local t = result[v.chain].append
+      t[#t + 1] = v
     end
   end
   return result
 end
 
 local function iptables_evaluate(data, chain, protocol, port)
-  local append = data[chain].append
-  for i = 1, #append do
-    local v = append[i]
-    if v.address_or_interface == nil then
+  local t = data[chain].append
+  for i = 1, #t do
+    local v = t[i]
+    if not v.address_or_interface then
       local pass = false
       if v.protocol == nil then
         pass = true
@@ -192,17 +188,17 @@ local function services_parse(handle)
     local a, b, service, port, protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
     if b ~= nil then
       local port = tonumber(port)
-      local name = { service }
+      local t = { service }
       for j in line:sub(b + 1):gmatch("[^%s]+") do
-        name[#name + 1] = j
+        t[#t + 1] = j
       end
-      for j = 1, #name do
-        local a = name[j]
-        if result[a] == nil then
-          result[a] = {}
+      for j = 1, #t do
+        local v = t[j]
+        if result[v] == nil then
+          result[v] = {}
         end
-        local b = result[a]
-        b[#b + 1] = {
+        local t = result[v]
+        t[#t + 1] = {
           port = port;
           protocol = protocol;
         }
@@ -212,15 +208,7 @@ local function services_parse(handle)
   return result
 end
 
--- local data = iptables_parse(io.stdin)
--- print(json.encode(data))
--- print(iptables_evaluate(data, arg[1], arg[2], tonumber(arg[3])))
-
--- local data = services_parse(io.stdin)
--- print(json.encode(data))
--- print(json.encode(data[arg[1]]))
-
-local function as_boolean(v)
+local function string_to_boolean(v)
   if v == "yes" or v == "on" or v == "1" or v == "true" then
     return true
   elseif v == "no" or v == "off" or v == "0" or v == "false" then
@@ -266,7 +254,7 @@ local result, message = pcall(function (filename)
       end
       port = tonumber(port)
     elseif k == "permanent" then
-      permanent = as_boolean(v)
+      permanent = string_to_boolean(v)
       if permanent == nil then
         error("bad argument " .. item)
       end
@@ -313,8 +301,9 @@ local result, message = pcall(function (filename)
     }
   end
 
-  local handle = assert(io.open("data06.txt"))
+  local handle = assert(io.popen([[env "PATH=$PATH:/usr/sbin:/sbin" iptables-save -t filter]]))
   local iptables = iptables_parse(handle)
+  print(json.encode(iptables))
   assert(handle:close())
 
   for i = 1, #rule do
