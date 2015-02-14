@@ -1,4 +1,6 @@
 local json = require "dromozoa.json"
+local shlex = require "dromozoa.shlex"
+
 local unpack = table.unpack
 
 local function iptables_parse_line(line)
@@ -183,10 +185,6 @@ local function iptables_evaluate(data, chain, protocol, port)
   return data[chain].policy, chain, 0
 end
 
--- local data = iptables_parse(io.stdin)
--- print(json.encode(data))
--- print(iptables_evaluate(data, arg[1], arg[2], tonumber(arg[3])))
-
 local function services_parse(handle)
   local result = {}
   for i in handle:lines() do
@@ -214,7 +212,126 @@ local function services_parse(handle)
   return result
 end
 
-local data = services_parse(io.stdin)
+-- local data = iptables_parse(io.stdin)
 -- print(json.encode(data))
-print(json.encode(data[arg[1]]))
+-- print(iptables_evaluate(data, arg[1], arg[2], tonumber(arg[3])))
 
+-- local data = services_parse(io.stdin)
+-- print(json.encode(data))
+-- print(json.encode(data[arg[1]]))
+
+local function as_boolean(v)
+  if v == "yes" or v == "on" or v == "1" or v == "true" then
+    return true
+  elseif v == "no" or v == "off" or v == "0" or v == "false" then
+    return false
+  else
+    return nil
+  end
+end
+
+local function is_root()
+  local handle = assert(io.popen("id -u -r"))
+  local euid = handle:read("*n")
+  assert(handle:close())
+  return euid == 0
+end
+
+local result, message = pcall(function (filename)
+  local content
+  if filename == nil then
+    content = io.read("*a")
+  else
+    local handle = assert(io.open(filename))
+    content = handle:read("*a")
+    assert(handle:close())
+  end
+
+  local service
+  local port
+  local protocol
+  local permanent
+  local state
+
+  local list = shlex.split(content)
+  for i = 1, #list do
+    local item = list[i]
+    local k, v = item:match("^([^=]+)=(.*)")
+    if k == "service" then
+      service = v
+    elseif k == "port" then
+      port, protocol = v:match("^(%d+)/(.*)")
+      if port == nil then
+        error("bad argument " .. item)
+      end
+      port = tonumber(port)
+    elseif k == "permanent" then
+      permanent = as_boolean(v)
+      if permanent == nil then
+        error("bad argument " .. item)
+      end
+    elseif k == "state" then
+      if v == "enabled" or v == "disabled" then
+        state = v
+      else
+        error("bad argument " .. item)
+      end
+    else
+      error("bad argument " .. item)
+    end
+  end
+
+  if service == nil and port == nil then
+    error "service or port is required"
+  end
+  if permanent == nil then
+    error "permanent is required"
+  end
+  if state == nil then
+    error "state is required"
+  end
+
+  local rule = {}
+  if service ~= nil then
+    local handle = assert(io.open("/etc/services"))
+    local services = services_parse(handle)
+    assert(handle:close())
+
+    local t = services[service]
+    for i = 1, #t do
+      local v = t[i]
+      rule[#rule + 1] = {
+        port = v.port;
+        protocol = v.protocol;
+      }
+    end
+  end
+  if port ~= nil then
+    rule[#rule + 1] = {
+      port = port;
+      protocol = protocol;
+    }
+  end
+
+  local handle = assert(io.open("data06.txt"))
+  local iptables = iptables_parse(handle)
+  assert(handle:close())
+
+  for i = 1, #rule do
+    local v = rule[i]
+    print(iptables_evaluate(iptables, "INPUT", v.protocol, v.port))
+  end
+
+  print("rule", json.encode(rule))
+  print("permanent", permanent)
+  print("state", state)
+end, ...)
+
+if not result then
+  io.write(json.encode {
+    failed = true;
+    msg = message;
+  }, "\n")
+end
+
+print(is_root())
