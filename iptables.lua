@@ -50,29 +50,29 @@ local function iptables_parse_line(line)
         invert = true
       end
       if scan "%-s (.-) " then
+        result.address_or_interface = true
         result.source = {
           invert = invert;
           address = _1;
         }
-        result.address_or_interface = true
       elseif scan "%-d (.-) " then
+        result.address_or_interface = true
         result.destination = {
           invert = invert;
           address = _1;
         }
-        result.address_or_interface = true
       elseif scan "%-i (.-) " then
+        result.address_or_interface = true
         result.in_interface = {
           invert = invert;
           interface = _1;
         }
-        result.address_or_interface = true
       elseif scan "%-o (.-) " then
+        result.address_or_interface = true
         result.out_interface = {
           invert = invert;
           interface = _1;
         }
-        result.address_or_interface = true
       elseif scan "%-p (.-) " then
         result.protocol = {
           invert = invert;
@@ -97,6 +97,7 @@ local function iptables_parse_line(line)
       elseif a == "--reject-with" then
         result.reject_with = b
       elseif a == "-m" then
+        result.match = true
         if b == "state" and c == "--state" then
           result.match_state = {}
           for j in d:gmatch("[^,]+") do
@@ -119,9 +120,6 @@ local function iptables_parse_line(line)
         end
       end
     end
-    if rule[1] == "-j" then
-      result.jump_only = true
-    end
     result.rule = rule
     return result
   elseif scan "COMMIT" then
@@ -136,7 +134,7 @@ end
 
 local function iptables_parse(handle)
   local result = {}
-  for i in io.lines() do
+  for i in handle:lines() do
     local v = iptables_parse_line(i)
     if v.mode == "policy" then
       result[v.chain] = {
@@ -169,7 +167,7 @@ local function iptables_evaluate(data, chain, protocol, port)
         local pass = false
         if v.match_dport ~= nil then
           pass = v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max
-        elseif v.jump_only then
+        elseif not v.match then
           pass = true
         end
         if pass then
@@ -185,5 +183,38 @@ local function iptables_evaluate(data, chain, protocol, port)
   return data[chain].policy, chain, 0
 end
 
-local data = iptables_parse(io.stdin)
-print(iptables_evaluate(data, arg[1], arg[2], tonumber(arg[3])))
+-- local data = iptables_parse(io.stdin)
+-- print(json.encode(data))
+-- print(iptables_evaluate(data, arg[1], arg[2], tonumber(arg[3])))
+
+local function services_parse(handle)
+  local result = {}
+  for i in handle:lines() do
+    local line = i:gsub("#.*", "")
+    local a, b, service, port, protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
+    if b ~= nil then
+      local port = tonumber(port)
+      local name = { service }
+      for j in line:sub(b + 1):gmatch("[^%s]+") do
+        name[#name + 1] = j
+      end
+      for j = 1, #name do
+        local a = name[j]
+        if result[a] == nil then
+          result[a] = {}
+        end
+        local b = result[a]
+        b[#b + 1] = {
+          port = port;
+          protocol = protocol;
+        }
+      end
+    end
+  end
+  return result
+end
+
+local data = services_parse(io.stdin)
+-- print(json.encode(data))
+print(json.encode(data[arg[1]]))
+
