@@ -1,6 +1,13 @@
 local json = require "dromozoa.json"
 local shlex = require "dromozoa.shlex"
 
+local PATH = os.getenv("PATH")
+if PATH == nil or #PATH == 0 then
+  PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+else
+  PATH = PATH .. ":/usr/bin:/bin:/usr/sbin:/sbin"
+end
+
 local function iptables_parse_line(line)
   local i = 1
   local _1
@@ -25,8 +32,8 @@ local function iptables_parse_line(line)
     }
   elseif scan "%*([^%s]*)" then
     return {
-      mode = "filter";
-      filter = _1;
+      mode = "table";
+      table = _1;
     }
   elseif scan "%:(.-) (.-) " then
     return {
@@ -123,20 +130,28 @@ local function iptables_parse_line(line)
   end
 end
 
-local function iptables_parse(handle)
+local function iptables_parse()
   local result = {}
+
+  local handle = assert(io.popen(string.format([[env PATH="%s" iptables-save]], PATH)))
+  local table
   for i in handle:lines() do
     local v = iptables_parse_line(i)
-    if v.mode == "policy" then
-      result[v.chain] = {
+    if v.mode == "table" then
+      table = v.table
+      result[table] = {}
+    elseif v.mode == "policy" then
+      result[table][v.chain] = {
         policy = v.policy;
         append = {};
       }
     elseif v.mode == "append" then
-      local t = result[v.chain].append
+      local t = result[table][v.chain].append
       t[#t + 1] = v
     end
   end
+  handle:close()
+
   return result
 end
 
@@ -207,7 +222,7 @@ local function get_service_by_name(name)
 end
 
 local function get_euid()
-  local handle = assert(io.popen("id -u -r"))
+  local handle = assert(io.popen(string.format([[env PATH="%s" id -u -r]], PATH)))
   local euid = handle:read("*n")
   handle:close()
   return euid
@@ -288,14 +303,12 @@ local result, message = pcall(function (filename)
     error "state is required"
   end
 
-  local handle = assert(io.popen([[env "PATH=$PATH:/usr/sbin:/sbin" iptables-save -t filter]]))
-  local iptables = iptables_parse(handle)
+  local iptables = iptables_parse()
   print(json.encode(iptables))
-  handle:close()
 
   for i = 1, #service do
     local v = service[i]
-    print(iptables_evaluate(iptables, "INPUT", v.protocol, v.port))
+    print(iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port))
   end
 
   print("service", json.encode(service))
