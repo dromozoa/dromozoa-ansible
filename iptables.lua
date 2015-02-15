@@ -202,6 +202,45 @@ local function services_parse(handle)
   return result
 end
 
+local function get_service_by_name(name)
+  local result = {}
+
+  local handle = assert(io.open("/etc/services"))
+  for i in handle:lines() do
+    local line = i:gsub("#.*", "")
+    local a, b, s_name, s_port, s_protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
+    if b ~= nil then
+      local s = {
+        port = tonumber(s_port);
+        protocol = s_protocol;
+      }
+      if s_name == name then
+        result[#result + 1] = s
+      end
+      for j in line:sub(b + 1):gmatch("[^%s]+") do
+        if j == name then
+          result[#result + 1] = s
+        end
+      end
+    end
+  end
+  handle:close()
+
+  if #result == 0 then
+    return nil
+  else
+    return result
+  end
+end
+
+local function get_euid()
+  local handle = assert(io.popen("id -u -r"))
+  local euid = handle:read("*n")
+  assert(handle:close())
+  return euid
+end
+
+
 local string_to_boolean = {}
 do
   local t = { "yes", "on", "1", "true" }
@@ -212,13 +251,6 @@ do
   for i = 1, #t do
     string_to_boolean[t[i]] = false
   end
-end
-
-local function is_root()
-  local handle = assert(io.popen("id -u -r"))
-  local euid = handle:read("*n")
-  assert(handle:close())
-  return euid == 0
 end
 
 local result, message = pcall(function (filename)
@@ -277,11 +309,13 @@ local result, message = pcall(function (filename)
 
   local rule = {}
   if service ~= nil then
-    local handle = assert(io.open("/etc/services"))
-    local services = services_parse(handle)
-    assert(handle:close())
+    -- local handle = assert(io.open("/etc/services"))
+    -- local services = services_parse(handle)
+    -- assert(handle:close())
 
-    local t = services[service]
+    -- local t = services[service]
+    local t = get_service_by_name(service)
+    print(json.encode(t))
     for i = 1, #t do
       local v = t[i]
       rule[#rule + 1] = {
