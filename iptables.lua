@@ -175,33 +175,6 @@ local function iptables_evaluate(data, chain, protocol, port)
   return data[chain].policy, chain, 0
 end
 
-local function services_parse(handle)
-  local result = {}
-  for i in handle:lines() do
-    local line = i:gsub("#.*", "")
-    local a, b, service, port, protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
-    if b ~= nil then
-      local port = tonumber(port)
-      local t1 = { service }
-      for j in line:sub(b + 1):gmatch("[^%s]+") do
-        t1[#t1 + 1] = j
-      end
-      for j = 1, #t1 do
-        local v = t1[j]
-        if result[v] == nil then
-          result[v] = {}
-        end
-        local t2 = result[v]
-        t2[#t2 + 1] = {
-          port = port;
-          protocol = protocol;
-        }
-      end
-    end
-  end
-  return result
-end
-
 local function get_service_by_name(name)
   local result = {}
 
@@ -352,5 +325,3 @@ if not result then
     msg = message;
   }, "\n")
 end
-
-print(is_root())
