@@ -209,10 +209,9 @@ end
 local function get_euid()
   local handle = assert(io.popen("id -u -r"))
   local euid = handle:read("*n")
-  assert(handle:close())
+  handle:close()
   return euid
 end
-
 
 local string_to_boolean = {}
 do
@@ -227,18 +226,21 @@ do
 end
 
 local result, message = pcall(function (filename)
-  local content
-  if filename == nil then
-    content = io.read("*a")
-  else
-    local handle = assert(io.open(filename))
-    content = handle:read("*a")
-    assert(handle:close())
+  local euid = get_euid()
+  if euid ~= 0 then
+    error "must be run as root"
   end
 
+  local handle
+  if filename == nil then
+    handle = io.stdin
+  else
+    handle = assert(io.open(filename))
+  end
+  local content = handle:read("*a")
+  handle:close()
+
   local service
-  local port
-  local protocol
   local permanent
   local state
 
@@ -247,13 +249,19 @@ local result, message = pcall(function (filename)
     local item = list[i]
     local k, v = item:match("^([^=]+)=(.*)")
     if k == "service" then
-      service = v
+      service = get_service_by_name(v)
+      if service == nil then
+        error("bad argument " .. item)
+      end
     elseif k == "port" then
-      port, protocol = v:match("^(%d+)/(.*)")
+      local port, protocol = v:match("^(%d+)/(.*)")
       if port == nil then
         error("bad argument " .. item)
       end
-      port = tonumber(port)
+      service = { {
+        port = tonumber(port);
+        protocol = protocol;
+      } }
     elseif k == "permanent" then
       permanent = string_to_boolean[v]
       if permanent == nil then
@@ -270,7 +278,7 @@ local result, message = pcall(function (filename)
     end
   end
 
-  if service == nil and port == nil then
+  if service == nil then
     error "service or port is required"
   end
   if permanent == nil then
@@ -280,41 +288,17 @@ local result, message = pcall(function (filename)
     error "state is required"
   end
 
-  local rule = {}
-  if service ~= nil then
-    -- local handle = assert(io.open("/etc/services"))
-    -- local services = services_parse(handle)
-    -- assert(handle:close())
-
-    -- local t = services[service]
-    local t = get_service_by_name(service)
-    print(json.encode(t))
-    for i = 1, #t do
-      local v = t[i]
-      rule[#rule + 1] = {
-        port = v.port;
-        protocol = v.protocol;
-      }
-    end
-  end
-  if port ~= nil then
-    rule[#rule + 1] = {
-      port = port;
-      protocol = protocol;
-    }
-  end
-
   local handle = assert(io.popen([[env "PATH=$PATH:/usr/sbin:/sbin" iptables-save -t filter]]))
   local iptables = iptables_parse(handle)
   print(json.encode(iptables))
-  assert(handle:close())
+  handle:close()
 
-  for i = 1, #rule do
-    local v = rule[i]
+  for i = 1, #service do
+    local v = service[i]
     print(iptables_evaluate(iptables, "INPUT", v.protocol, v.port))
   end
 
-  print("rule", json.encode(rule))
+  print("service", json.encode(service))
   print("permanent", permanent)
   print("state", state)
 end, ...)
