@@ -1,5 +1,0 @@
-#! /usr/bin/env lua
-
-local json = require "dkjson"
-
-
