@@ -1,7 +1,23 @@
 local json = require "dromozoa.json"
 local shlex = require "dromozoa.shlex"
 
-local unpack = table.unpack
+local format = string.format
+
+local PATH = os.getenv("PATH")
+if PATH == nil or #PATH == 0 then
+  PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+else
+  PATH = PATH .. ":/usr/bin:/bin:/usr/sbin:/sbin"
+end
+
+local function execute(command)
+  local a, b = os.execute(command)
+  if type(a) == "boolean" then
+    assert(a, b)
+  else
+    assert(a == 0)
+  end
+end
 
 local function iptables_parse_line(line)
   local i = 1
@@ -22,28 +38,26 @@ local function iptables_parse_line(line)
 
   if scan "#%s*(.*)" then
     return {
-      line = line;
       mode = "comment";
       comment = _1;
     }
   elseif scan "%*([^%s]*)" then
     return {
-      line = line;
-      mode = "filter";
-      filter = _1;
+      mode = "table";
+      table = _1;
     }
   elseif scan "%:(.-) (.-) " then
     return {
-      line = line;
       mode = "policy";
       chain = _1;
       policy = _2;
     }
   elseif scan "%-A (.-) " then
     local result = {
-      line = line;
       mode = "append";
       chain = _1;
+      address_or_interface = false;
+      match = false;
     }
     while i <= #line do
       local j = i
@@ -85,15 +99,13 @@ local function iptables_parse_line(line)
         break
       end
     end
-
-    local rule = {}
-    while i <= #line do
-      if scan "([^%s]+) " then
-        rule[#rule + 1] = _1
-      end
+    local t = {}
+    for j in line:sub(i):gmatch("[^%s]+") do
+      t[#t + 1] = j
     end
-    for i = 1, #rule do
-      local a, b, c, d = unpack(rule, i, i + 3)
+    result.match = false
+    for j = 1, #t do
+      local a, b, c, d = t[j], t[j + 1], t[j + 2], t[j + 3]
       if a == "-j" then
         result.jump = b
       elseif a == "--reject-with" then
@@ -101,10 +113,7 @@ local function iptables_parse_line(line)
       elseif a == "-m" then
         result.match = true
         if b == "state" and c == "--state" then
-          result.match_state = {}
-          for j in d:gmatch("[^,]+") do
-            result.match_state[j] = true
-          end
+          result.match_state = d
         elseif c == "--dport" then
           local min, max = d:match("^(%d+):(%d+)$")
           if min == nil then
@@ -122,55 +131,64 @@ local function iptables_parse_line(line)
         end
       end
     end
-    result.rule = rule
     return result
   elseif scan "COMMIT" then
     return {
-      line = line;
       mode = "commit";
     }
   else
-    error "could not scan"
+    error "could not parse"
   end
 end
 
-local function iptables_parse(handle)
+local function iptables_parse()
   local result = {}
+  local table
+  local n = 0
+
+  local handle = assert(io.popen(format([[env PATH="%s" iptables-save]], PATH)))
   for i in handle:lines() do
     local v = iptables_parse_line(i)
-    if v.mode == "policy" then
-      result[v.chain] = {
+    if v.mode == "table" then
+      table = v.table
+      result[table] = {}
+    elseif v.mode == "policy" then
+      result[table][v.chain] = {
         policy = v.policy;
         append = {};
       }
     elseif v.mode == "append" then
-      local append = result[v.chain].append
-      append[#append + 1] = v
+      n = n + 1
+      local t = result[table][v.chain].append
+      t[#t + 1] = v
     end
   end
-  return result
+  handle:close()
+
+  return result, n
 end
 
 local function iptables_evaluate(data, chain, protocol, port)
-  local append = data[chain].append
-  for i = 1, #append do
-    local v = append[i]
-    if v.address_or_interface == nil then
-      local pass = false
+  local t = data[chain].append
+  for i = 1, #t do
+    local v = t[i]
+    if not v.address_or_interface then
+      local pass
       if v.protocol == nil then
         pass = true
       else
-        pass = v.protocol.protocol == protocol
         if v.protocol.invert then
-          pass = not pass
+          pass = v.protocol.protocol ~= protocol
+        else
+          pass = v.protocol.protocol == protocol
         end
       end
       if pass then
-        local pass = false
-        if v.match_dport ~= nil then
+        local pass
+        if v.match_dport == nil then
+          pass = not v.match
+        else
           pass = v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max
-        elseif not v.match then
-          pass = true
         end
         if pass then
           if data[v.jump] == nil then
@@ -185,71 +203,84 @@ local function iptables_evaluate(data, chain, protocol, port)
   return data[chain].policy, chain, 0
 end
 
-local function services_parse(handle)
+local function iptables_insert(chain, i, protocol, port, target)
+  if protocol == "tcp" then
+    execute(format([[env PATH="%s" iptables -I "%s" %d -p tcp -m state --state NEW -m tcp --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, port, target))
+  else
+    execute(format([[env PATH="%s" iptables -I "%s" %d -p "%s" -m "%s" --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, protocol, protocol, port, target))
+  end
+end
+
+local function iptables_remove(chain, i)
+    execute(format([[env PATH="%s" iptables -D "%s" %d >/dev/null 2>&1]], PATH, chain, i))
+end
+
+local function get_service_by_name(name)
   local result = {}
+
+  local handle = assert(io.open("/etc/services"))
   for i in handle:lines() do
     local line = i:gsub("#.*", "")
-    local a, b, service, port, protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
+    local a, b, s_name, s_port, s_protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
     if b ~= nil then
-      local port = tonumber(port)
-      local name = { service }
-      for j in line:sub(b + 1):gmatch("[^%s]+") do
-        name[#name + 1] = j
+      local s = {
+        port = tonumber(s_port);
+        protocol = s_protocol;
+      }
+      if s_name == name then
+        result[#result + 1] = s
       end
-      for j = 1, #name do
-        local a = name[j]
-        if result[a] == nil then
-          result[a] = {}
+      for j in line:sub(b + 1):gmatch("[^%s]+") do
+        if j == name then
+          result[#result + 1] = s
         end
-        local b = result[a]
-        b[#b + 1] = {
-          port = port;
-          protocol = protocol;
-        }
       end
     end
   end
-  return result
-end
+  handle:close()
 
--- local data = iptables_parse(io.stdin)
--- print(json.encode(data))
--- print(iptables_evaluate(data, arg[1], arg[2], tonumber(arg[3])))
-
--- local data = services_parse(io.stdin)
--- print(json.encode(data))
--- print(json.encode(data[arg[1]]))
-
-local function as_boolean(v)
-  if v == "yes" or v == "on" or v == "1" or v == "true" then
-    return true
-  elseif v == "no" or v == "off" or v == "0" or v == "false" then
-    return false
-  else
+  if #result == 0 then
     return nil
+  else
+    return result
   end
 end
 
-local function is_root()
-  local handle = assert(io.popen("id -u -r"))
+local function get_euid()
+  local handle = assert(io.popen(format([[env PATH="%s" id -u -r]], PATH)))
   local euid = handle:read("*n")
-  assert(handle:close())
-  return euid == 0
+  handle:close()
+  return euid
+end
+
+local string_to_boolean = {}
+do
+  local t = { "yes", "on", "1", "true" }
+  for i = 1, #t do
+    string_to_boolean[t[i]] = true
+  end
+  local t = { "no", "off", "0", "false" }
+  for i = 1, #t do
+    string_to_boolean[t[i]] = false
+  end
 end
 
 local result, message = pcall(function (filename)
-  local content
-  if filename == nil then
-    content = io.read("*a")
-  else
-    local handle = assert(io.open(filename))
-    content = handle:read("*a")
-    assert(handle:close())
+  local euid = get_euid()
+  if euid ~= 0 then
+    error "must be run as root"
   end
 
+  local handle
+  if filename == nil then
+    handle = io.stdin
+  else
+    handle = assert(io.open(filename))
+  end
+  local content = handle:read("*a")
+  handle:close()
+
   local service
-  local port
-  local protocol
   local permanent
   local state
 
@@ -258,15 +289,21 @@ local result, message = pcall(function (filename)
     local item = list[i]
     local k, v = item:match("^([^=]+)=(.*)")
     if k == "service" then
-      service = v
+      service = get_service_by_name(v)
+      if service == nil then
+        error("bad argument " .. item)
+      end
     elseif k == "port" then
-      port, protocol = v:match("^(%d+)/(.*)")
+      local port, protocol = v:match("^(%d+)/(.*)")
       if port == nil then
         error("bad argument " .. item)
       end
-      port = tonumber(port)
+      service = { {
+        port = tonumber(port);
+        protocol = protocol;
+      } }
     elseif k == "permanent" then
-      permanent = as_boolean(v)
+      permanent = string_to_boolean[v]
       if permanent == nil then
         error("bad argument " .. item)
       end
@@ -281,7 +318,7 @@ local result, message = pcall(function (filename)
     end
   end
 
-  if service == nil and port == nil then
+  if service == nil then
     error "service or port is required"
   end
   if permanent == nil then
@@ -291,40 +328,45 @@ local result, message = pcall(function (filename)
     error "state is required"
   end
 
-  local rule = {}
-  if service ~= nil then
-    local handle = assert(io.open("/etc/services"))
-    local services = services_parse(handle)
-    assert(handle:close())
+  local changed = false
 
-    local t = services[service]
-    for i = 1, #t do
-      local v = t[i]
-      rule[#rule + 1] = {
-        port = v.port;
-        protocol = v.protocol;
-      }
+  local iptables, n = iptables_parse()
+  if n == 0 then
+    execute(format([[env PATH="%s" lokkit -q --enabled -p 22/tcp -f >/dev/null 2>&1]], PATH))
+    changed = true
+    iptables = iptables_parse()
+  end
+
+  for i = 1, #service do
+    local v = service[i]
+    local target, chain, j = iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port)
+    if state == "enabled" and target == "REJECT" then
+      local t = iptables.filter[chain].append[j]
+      if t.match_dport ~= nil and t.match_dport.name == v.protocol and t.match_dport.min == v.port and t.match_dport.max == v.port then
+        iptables_remove(chain, j)
+      else
+        iptables_insert(chain, j, v.protocol, v.port, "ACCEPT")
+      end
+      changed = true
+    elseif state == "disabled" and target == "ACCEPT" then
+      local t = iptables.filter[chain].append[j]
+      if t.match_dport ~= nil and t.match_dport.name == v.protocol and t.match_dport.min == v.port and t.match_dport.max == v.port then
+        iptables_remove(chain, j)
+      else
+        iptables_insert(chain, j, v.protocol, v.port, "REJECT")
+      end
+      changed = true
     end
   end
-  if port ~= nil then
-    rule[#rule + 1] = {
-      port = port;
-      protocol = protocol;
-    }
+
+  if permanent and changed then
+    execute(format([[env PATH="%s" service iptables save >/dev/null 2>&1]], PATH))
   end
 
-  local handle = assert(io.open("data06.txt"))
-  local iptables = iptables_parse(handle)
-  assert(handle:close())
-
-  for i = 1, #rule do
-    local v = rule[i]
-    print(iptables_evaluate(iptables, "INPUT", v.protocol, v.port))
-  end
-
-  print("rule", json.encode(rule))
+  print("service", json.encode(service))
   print("permanent", permanent)
   print("state", state)
+  print("changed", changed)
 end, ...)
 
 if not result then
@@ -333,5 +375,3 @@ if not result then
     msg = message;
   }, "\n")
 end
-
-print(is_root())
