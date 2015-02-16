@@ -1,5 +1,5 @@
 - hosts: all
   tasks:
   - name: iptables
-    dromozoa-iptables: service=http permanent=true state=enabled
+    dromozoa-iptables: service=http permanent=true state=disabled
 

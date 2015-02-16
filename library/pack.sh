@@ -15,7 +15,7 @@ shift
 echo "#! /usr/bin/env lua" >"$target"
 for i in utf8 json shlex
 do
-  curl -fsL "https://github.com/dromozoa/dromozoa-$i/raw/master/dromozoa-$i.lua" >>"$target"
+  curl -fsL "https://github.com/dromozoa/dromozoa-$i/raw/develop/dromozoa-$i.lua" >>"$target"
 done
 cat "$source" >>"$target"
 chmod 755 "$target"
