@@ -11,11 +11,11 @@ else
 end
 
 local function execute(command)
-  local a, b = os.execute(command)
-  if type(a) == "boolean" then
-    assert(a, b)
+  local result = os.execute(command)
+  if type(result) == "boolean" then
+    return result
   else
-    assert(a == 0)
+    return result == 0
   end
 end
 
@@ -184,15 +184,21 @@ local function iptables_evaluate(data, chain, protocol, port)
         end
       end
       if pass then
-        local pass
+        local mode
         if v.match_dport == nil then
-          pass = not v.match
-        else
-          pass = v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max
+          if not v.match then
+            mode = "no_match"
+          end
+        elseif v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max then
+          if v.match_dport.min == v.match_dport.max then
+            mode = "match_dport_single"
+          else
+            mode = "match_dport_range"
+          end
         end
-        if pass then
+        if mode then
           if data[v.jump] == nil then
-            return v.jump, chain, i
+            return v.jump, chain, i, mode
           else
             return iptables_evaluate(data, v.jump, protocol, port)
           end
@@ -205,14 +211,14 @@ end
 
 local function iptables_insert(chain, i, protocol, port, target)
   if protocol == "tcp" then
-    execute(format([[env PATH="%s" iptables -I "%s" %d -p tcp -m state --state NEW -m tcp --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, port, target))
+    assert(execute(format([[env PATH="%s" iptables -I "%s" %d -p tcp -m state --state NEW -m tcp --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, port, target)))
   else
-    execute(format([[env PATH="%s" iptables -I "%s" %d -p "%s" -m "%s" --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, protocol, protocol, port, target))
+    assert(execute(format([[env PATH="%s" iptables -I "%s" %d -p "%s" -m "%s" --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, protocol, protocol, port, target)))
   end
 end
 
 local function iptables_remove(chain, i)
-    execute(format([[env PATH="%s" iptables -D "%s" %d >/dev/null 2>&1]], PATH, chain, i))
+  assert(execute(format([[env PATH="%s" iptables -D "%s" %d >/dev/null 2>&1]], PATH, chain, i)))
 end
 
 local function get_service_by_name(name)
@@ -332,41 +338,42 @@ local result, message = pcall(function (filename)
 
   local iptables, n = iptables_parse()
   if n == 0 then
-    execute(format([[env PATH="%s" lokkit -q --enabled -p 22/tcp -f >/dev/null 2>&1]], PATH))
+    assert(execute(format([[env PATH="%s" lokkit -q --enabled -p 22/tcp -f >/dev/null 2>&1]], PATH)))
     changed = true
     iptables = iptables_parse()
   end
 
   for i = 1, #service do
     local v = service[i]
-    local target, chain, j = iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port)
+    local target, chain, j, mode = iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port)
     if state == "enabled" and target == "REJECT" then
       local t = iptables.filter[chain].append[j]
-      if t.match_dport ~= nil and t.match_dport.name == v.protocol and t.match_dport.min == v.port and t.match_dport.max == v.port then
+      if mode == "match_dport_single" then
         iptables_remove(chain, j)
       else
         iptables_insert(chain, j, v.protocol, v.port, "ACCEPT")
       end
       changed = true
+      iptables = iptables_parse()
     elseif state == "disabled" and target == "ACCEPT" then
       local t = iptables.filter[chain].append[j]
-      if t.match_dport ~= nil and t.match_dport.name == v.protocol and t.match_dport.min == v.port and t.match_dport.max == v.port then
+      if mode == "match_dport_single" then
         iptables_remove(chain, j)
       else
         iptables_insert(chain, j, v.protocol, v.port, "REJECT")
       end
       changed = true
+      iptables = iptables_parse()
     end
   end
 
   if permanent and changed then
-    execute(format([[env PATH="%s" service iptables save >/dev/null 2>&1]], PATH))
+    assert(execute(format([[env PATH="%s" service iptables save >/dev/null 2>&1]], PATH)))
   end
 
-  print("service", json.encode(service))
-  print("permanent", permanent)
-  print("state", state)
-  print("changed", changed)
+  io.write(json.encode {
+    changed = changed;
+  }, "\n")
 end, ...)
 
 if not result then

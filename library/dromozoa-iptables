@@ -1,0 +1,1226 @@
+#! /usr/bin/env lua
+-- This file was auto-generated.
+package.loaded["dromozoa.utf8.pure"] = (function ()
+-- ===========================================================================
+-- dromozoa.utf8.pure
+-- ===========================================================================
+-- Copyright (C) 2015 Tomoyuki Fujimori <moyu@dromozoa.com>
+--
+-- This file is part of dromozoa-utf8.
+--
+-- dromozoa-utf8 is free software: you can redistribute it and/or modify
+-- it under the terms of the GNU General Public License as published by
+-- the Free Software Foundation, either version 3 of the License, or
+-- (at your option) any later version.
+--
+-- dromozoa-utf8 is distributed in the hope that it will be useful,
+-- but WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-- GNU General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with dromozoa-utf8.  If not, see <http://www.gnu.org/licenses/>.
+
+local char = string.char
+local concat = table.concat
+local floor = math.floor
+local select = select
+local unpack = table.unpack or unpack
+
+local function encode(a)
+  if a < 0 then
+    return nil
+  elseif a <= 0x7F then
+    return char(a)
+  elseif a <= 0x07FF then
+    local b = a % 0x40
+    local a = floor(a / 0x40)
+    return char(a + 0xC0, b + 0x80)
+  elseif a <= 0xFFFF then
+    if 0xD800 <= a and a <= 0xDFFF then return nil end
+    local c = a % 0x40
+    local a = floor(a / 0x40)
+    local b = a % 0x40
+    local a = floor(a / 0x40)
+    return char(a + 0xE0, b + 0x80, c + 0x80)
+  elseif a <= 0x10FFFF then
+    local d = a % 0x40
+    local a = floor(a / 0x40)
+    local c = a % 0x40
+    local a = floor(a / 0x40)
+    local b = a % 0x40
+    local a = floor(a / 0x40)
+    return char(a + 0xF0, b + 0x80, c + 0x80, d + 0x80)
+  else
+    return nil
+  end
+end
+
+local function decode(s, i)
+  local a, b, c, d = s:byte(i, i + 3)
+  if a == nil then
+    return nil
+  elseif a <= 0x7F then
+    return i + 1, a
+  elseif 0xC2 <= a then
+    if a <= 0xDF then
+      if b == nil or b < 0x80 or 0xBF < b then return nil end
+      local a = a % 0x20 * 0x40
+      local b = b % 0x40
+      return i + 2, a + b
+    elseif a <= 0xEF then
+      if a <= 0xEC then
+        if a == 0xE0 then
+          if b == nil or b < 0xA0 or 0xBF < b then return nil end
+        else
+          if b == nil or b < 0x80 or 0xBF < b then return nil end
+        end
+      else
+        if a == 0xED then
+          if b == nil or b < 0x80 or 0x9F < b then return nil end
+        else
+          if b == nil or b < 0x80 or 0xBF < b then return nil end
+        end
+      end
+      if c == nil or c < 0x80 or 0xBF < c then return nil end
+      local a = a % 0x10 * 0x1000
+      local b = b % 0x40 * 0x40
+      local c = c % 0x40
+      return i + 3, a + b + c
+    elseif a <= 0xF4 then
+      if a == 0xF0 then
+        if b == nil or b < 0x90 or 0xBF < b then return nil end
+      elseif a <= 0xF3 then
+        if b == nil or b < 0x80 or 0xBF < b then return nil end
+      else
+        if b == nil or b < 0x80 or 0x8F < b then return nil end
+      end
+      if c == nil or c < 0x80 or 0xBF < c then return nil end
+      if d == nil or d < 0x80 or 0xBF < d then return nil end
+      local a = a % 0x08 * 0x040000
+      local b = b % 0x40 * 0x1000
+      local c = c % 0x40 * 0x40
+      local d = d % 0x40
+      return i + 4, a + b + c + d
+    end
+  end
+  return nil
+end
+
+local function char(...)
+  local result = {}
+  for i = 1, select("#", ...) do
+    local a = encode(select(i, ...))
+    if a == nil then
+      error("bad argument #" .. i)
+    end
+    result[#result + 1] = a
+  end
+  return concat(result)
+end
+
+local function codes(s)
+  local i = 1
+  return function (s)
+    if i <= #s then
+      local j = i
+      local c
+      i, c = decode(s, i)
+      if i == nil then
+        error "invalid UTF-8 code"
+      else
+        return j, c
+      end
+    else
+      return nil
+    end
+  end, s
+end
+
+local function codepoint(s, i, j)
+  if i == nil then
+    i = 1
+  else
+    if i < 0 then
+      i = #s + 1 + i
+    end
+    if i < 1 then
+      error "bad argument #2"
+    end
+  end
+
+  if j == nil then
+    j = i
+  elseif j < 0 then
+    j = #s + 1 + j
+  end
+  if #s < j then
+    error "bad argument #3"
+  end
+
+  local result = {}
+  while i <= j do
+    i, result[#result + 1] = decode(s, i)
+    if i == nil then
+      error "invalid UTF-8 code"
+    end
+  end
+  return unpack(result)
+end
+
+local function len(s, i, j)
+  if i == nil then
+    i = 1
+  else
+    if i < 0 then
+      i = #s + 1 + i
+    end
+    if i < 1 or #s + 1 < i then
+      error "bad argument #2"
+    end
+  end
+
+  if j == nil then
+    j = #s
+  else
+    if j < 0 then
+      j = #s + 1 + j
+    end
+    if #s < j then
+      error "bad argument #3"
+    end
+  end
+
+  local result = 0
+  while i <= j do
+    local a, b, c, d = s:byte(i, i + 3)
+    if a == nil then
+      return nil, i
+    elseif a <= 0x7F then
+      i = i + 1
+    elseif 0xC2 <= a then
+      if a <= 0xDF then
+        if b == nil or b < 0x80 or 0xBF < b then return nil, i end
+        i = i + 2
+      elseif a <= 0xEF then
+        if a <= 0xEC then
+          if a == 0xE0 then
+            if b == nil or b < 0xA0 or 0xBF < b then return nil, i end
+          else
+            if b == nil or b < 0x80 or 0xBF < b then return nil, i end
+          end
+        else
+          if a == 0xED then
+            if b == nil or b < 0x80 or 0x9F < b then return nil, i end
+          else
+            if b == nil or b < 0x80 or 0xBF < b then return nil, i end
+          end
+        end
+        if c == nil or c < 0x80 or 0xBF < c then return nil, i end
+        i = i + 3
+      elseif a <= 0xF4 then
+        if a == 0xF0 then
+          if b == nil or b < 0x90 or 0xBF < b then return nil, i end
+        elseif a <= 0xF3 then
+          if b == nil or b < 0x80 or 0xBF < b then return nil, i end
+        else
+          if b == nil or b < 0x80 or 0x8F < b then return nil, i end
+        end
+        if c == nil or c < 0x80 or 0xBF < c then return nil, i end
+        if d == nil or d < 0x80 or 0xBF < d then return nil, i end
+        i = i + 4
+      else
+        return nil, i
+      end
+    else
+      return nil, i
+    end
+    result = result + 1
+  end
+  return result
+end
+
+local function offset(s, n, i)
+  if n == nil then
+    error "bad argument #2"
+  end
+
+  if i == nil then
+    if n < 0 then
+      i = #s + 1
+    else
+      i = 1
+    end
+  else
+    if i < 0 then
+      i = #s + 1 + i
+    end
+    if i < 1 or #s + 1 < i then
+      error "bad argument #3"
+    end
+  end
+
+  local a = s:byte(i)
+  if n == 0 then
+    while a ~= nil and 0x80 <= a and a <= 0xBF do
+      i = i - 1
+      a = s:byte(i)
+    end
+  else
+    if a ~= nil and 0x80 <= a and a <= 0xBF then
+      error "initial position is a continuation byte"
+    end
+    if n < 0 then
+      while n < 0 do
+        repeat
+          i = i - 1
+          a = s:byte(i)
+          if a == nil then return nil end
+        until a < 0x80 or 0xBF < a
+        n = n + 1
+      end
+    else
+      while n > 1 do
+        if a == nil then return nil end
+        repeat
+          i = i + 1
+          a = s:byte(i)
+        until a == nil or a < 0x80 or 0xBF < a
+        n = n - 1
+      end
+    end
+  end
+  return i
+end
+
+return {
+  char = char;
+  charpattern = "[\000-\127\194-\244][\128-\191]*";
+  codes = codes;
+  codepoint = codepoint;
+  len = len;
+  offset = offset;
+  version = function () return "1.2" end;
+}
+-- ===========================================================================
+end)()
+package.loaded["dromozoa.utf8"] = (function ()
+-- ===========================================================================
+-- dromozoa.utf8
+-- ===========================================================================
+-- Copyright (C) 2015 Tomoyuki Fujimori <moyu@dromozoa.com>
+--
+-- This file is part of dromozoa-utf8.
+--
+-- dromozoa-utf8 is free software: you can redistribute it and/or modify
+-- it under the terms of the GNU General Public License as published by
+-- the Free Software Foundation, either version 3 of the License, or
+-- (at your option) any later version.
+--
+-- dromozoa-utf8 is distributed in the hope that it will be useful,
+-- but WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-- GNU General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with dromozoa-utf8.  If not, see <http://www.gnu.org/licenses/>.
+
+if utf8 then
+  return utf8
+else
+  return require "dromozoa.utf8.pure"
+end
+-- ===========================================================================
+end)()
+-- This file was auto-generated.
+package.loaded["dromozoa.json.pure"] = (function ()
+-- ===========================================================================
+-- dromozoa.json.pure
+-- ===========================================================================
+-- Copyright (C) 2015 Tomoyuki Fujimori <moyu@dromozoa.com>
+--
+-- This file is part of dromozoa-json.
+--
+-- dromozoa-json is free software: you can redistribute it and/or modify
+-- it under the terms of the GNU General Public License as published by
+-- the Free Software Foundation, either version 3 of the License, or
+-- (at your option) any later version.
+--
+-- dromozoa-json is distributed in the hope that it will be useful,
+-- but WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-- GNU General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with dromozoa-json.  If not, see <http://www.gnu.org/licenses/>.
+
+local utf8 = require "dromozoa.utf8"
+
+local concat = table.concat
+local floor = math.floor
+local format = string.format
+
+local function is_array(value)
+  local m = 0
+  local n = 0
+  for k, v in pairs(value) do
+    if type(k) == "number" and k > 0 and floor(k) == k then
+      if m < k then m = k end
+      n = n + 1
+    else
+      return nil
+    end
+  end
+  if m <= n * 2 then
+    return m
+  else
+    return nil
+  end
+end
+
+local function encoder()
+  local self = {
+    _buffer = {};
+  }
+
+  function self:write(value)
+    local buffer = self._buffer
+    buffer[#buffer + 1] = value
+  end
+
+  function self:encode_string(value)
+    local buffer = self._buffer
+    buffer[#buffer + 1] = [["]]
+    for p, c in utf8.codes(tostring(value)) do
+      if c == 0x22 then
+        buffer[#buffer + 1] = [[\"]]
+      elseif c == 0x5C then
+        buffer[#buffer + 1] = [[\\]]
+      elseif c == 0x2F then
+        buffer[#buffer + 1] = [[\/]]
+      elseif c == 0x08 then
+        buffer[#buffer + 1] = [[\b]]
+      elseif c == 0x0C then
+        buffer[#buffer + 1] = [[\f]]
+      elseif c == 0x0A then
+        buffer[#buffer + 1] = [[\n]]
+      elseif c == 0x0D then
+        buffer[#buffer + 1] = [[\r]]
+      elseif c == 0x09 then
+        buffer[#buffer + 1] = [[\t]]
+      elseif c < 0x20 then
+        buffer[#buffer + 1] = format([[\u%04X]], c)
+      else
+        buffer[#buffer + 1] = utf8.char(c)
+      end
+    end
+    buffer[#buffer + 1] = [["]]
+  end
+
+  function self:encode_value(value, depth)
+    if depth > 16 then
+      error "too much recursion"
+    end
+
+    local t = type(value)
+    if t == "number" then
+      self:write(format("%.17g", value))
+    elseif t == "string" then
+      self:encode_string(value)
+    elseif t == "boolean" then
+      if value then
+        self:write("true")
+      else
+        self:write("false")
+      end
+    elseif t == "table" then
+      local n = is_array(value)
+      if n == nil then
+        self:write("{")
+        local k, v = next(value)
+        self:encode_string(k)
+        self:write(":")
+        self:encode_value(v, depth + 1)
+        for k, v in next, value, k do
+          self:write(",")
+          self:encode_string(k)
+          self:write(":")
+          self:encode_value(v, depth + 1)
+        end
+        self:write("}")
+      elseif n == 0 then
+        self:write("[]")
+      else
+        self:write("[")
+        self:encode_value(value[1], depth + 1)
+        for i = 2, n do
+          self:write(",")
+          self:encode_value(value[i], depth + 1)
+        end
+        self:write("]")
+      end
+    else
+      self:write("null")
+    end
+  end
+
+  function self:encode(value)
+    self:encode_value(value, 0)
+    return concat(self._buffer)
+  end
+
+  return self
+end
+
+local function stack()
+  local self = {
+    _data = {};
+    _size = 0;
+  }
+
+  function self:push(value)
+    self._size = self._size + 1
+    self._data[self._size] = value
+  end
+
+  function self:pop()
+    assert(self._size > 0)
+    local value = self._data[self._size]
+    self._size = self._size - 1
+    return value
+  end
+
+  function self:top()
+    assert(self._size > 0)
+    return self._data[self._size]
+  end
+
+  function self:size()
+    return self._size
+  end
+
+  return self
+end
+
+
+local function decoder(s)
+  local self = {
+    _s = s;
+    _i = 1;
+    _stack = stack();
+  }
+
+  function self:scan(pattern)
+    local i, j, a, b = self._s:find("^" .. pattern, self._i)
+    if j == nil then
+      return false
+    else
+      self._i = j + 1
+      self._1 = a
+      self._2 = b
+      return true
+    end
+  end
+
+  function self:scan_whitespace()
+    return self:scan("[ \t\n\r]+")
+  end
+
+  function self:die()
+    error("decode error at position " .. self._i)
+  end
+
+  function self:decode()
+    self:decode_value()
+    self:scan_whitespace()
+    if self._stack:size() == 1 and self._i == #self._s + 1 then
+      return self._stack:top()
+    else
+      self:die()
+    end
+  end
+
+  function self:decode_value()
+    self:scan_whitespace()
+    if self:decode_literal()
+    or self:decode_object()
+    or self:decode_array()
+    or self:decode_number()
+    or self:decode_string() then
+      return true
+    else
+      return false
+    end
+  end
+
+  function self:decode_literal()
+    if self:scan("true") then
+      self._stack:push(true)
+      return true
+    elseif self:scan("false") then
+      self._stack:push(false)
+      return true
+    elseif self:scan("null") then
+      self._stack:push(nil)
+      return true
+    else
+      return false
+    end
+  end
+
+  function self:decode_object()
+    if self:scan("{") then
+      self._stack:push({})
+      self:scan_whitespace()
+      if self:scan("}") then
+        return true
+      end
+      while self._i < #self._s do
+        self:scan_whitespace()
+        if not self:decode_string() then
+          self:die()
+        end
+        self:scan_whitespace()
+        if not self:scan(":") then
+          self:die()
+        end
+        self:scan_whitespace()
+        if not self:decode_value() then
+          self:die()
+        end
+        self:scan_whitespace()
+        if not self:scan("([,}])") then
+          self:die()
+        end
+        local v = self._stack:pop()
+        local n = self._stack:pop()
+        self._stack:top()[n] = v
+        if self._1 == "}" then
+          return true
+        end
+      end
+      self:die()
+    else
+      return false
+    end
+  end
+
+  function self:decode_array()
+    if self:scan("%[") then
+      self._stack:push({})
+      self:scan_whitespace()
+      if self:scan("%]") then
+        return true
+      end
+      local i = 1
+      while self._i <= #self._s do
+        self:scan_whitespace()
+        if not self:decode_value() then
+          self:die()
+        end
+        self:scan_whitespace()
+        if not self:scan("([,%]])") then
+          self:die()
+        end
+        local v = self._stack:pop()
+        self._stack:top()[i] = v
+        i = i + 1
+        if self._1 == "]" then
+          return true
+        end
+      end
+      self:die()
+    else
+      return false
+    end
+  end
+
+  function self:decode_number()
+    local i = self._i
+    if self:scan("%-?0") or self:scan("%-?[1-9]%d*") then
+      self:scan("%.%d*")
+      self:scan("[eE][%+%-]?%d+")
+      self._stack:push(tonumber(self._s:sub(i, self._i - 1)))
+      return true
+    else
+      return false
+    end
+  end
+
+  function self:decode_string()
+    if self:scan([["]]) then
+      local buffer = {}
+      while self._i <= #self._s do
+        if self:scan([[([^"\]+)]]) then
+          buffer[#buffer + 1] = self._1
+        end
+        if self:scan([["]]) then
+          self._stack:push(concat(buffer))
+          return true
+        elseif self:scan([[\(["\/])]]) then
+          buffer[#buffer + 1] = self._1
+        elseif self:scan([[\b]]) then
+          buffer[#buffer + 1] = "\b"
+        elseif self:scan([[\f]]) then
+          buffer[#buffer + 1] = "\f"
+        elseif self:scan([[\n]]) then
+          buffer[#buffer + 1] = "\n"
+        elseif self:scan([[\r]]) then
+          buffer[#buffer + 1] = "\r"
+        elseif self:scan([[\t]]) then
+          buffer[#buffer + 1] = "\t"
+        elseif self:scan([[\u([Dd][89ABab]%x%x)\u([Dd][C-Fc-f]%x%x)]]) then
+          local a = tonumber(self._1, 16) % 0x0400 * 0x0400
+          local b = tonumber(self._2, 16) % 0x0400
+          buffer[#buffer + 1] = utf8.char(a + b + 0x010000)
+        elseif self:scan([[\u(%x%x%x%x)]]) then
+          buffer[#buffer + 1] = utf8.char(tonumber(self._1, 16))
+        else
+          self:die()
+        end
+      end
+      return true
+    else
+      return false
+    end
+  end
+
+  return self
+end
+
+local function encode(value)
+  return encoder():encode(value)
+end
+
+local function decode(s)
+  return decoder(s):decode()
+end
+
+return {
+  decode = decode;
+  encode = encode;
+  version = function () return "1.0" end;
+}
+-- ===========================================================================
+end)()
+package.loaded["dromozoa.json"] = (function ()
+-- ===========================================================================
+-- dromozoa.json
+-- ===========================================================================
+-- Copyright (C) 2015 Tomoyuki Fujimori <moyu@dromozoa.com>
+--
+-- This file is part of dromozoa-json.
+--
+-- dromozoa-json is free software: you can redistribute it and/or modify
+-- it under the terms of the GNU General Public License as published by
+-- the Free Software Foundation, either version 3 of the License, or
+-- (at your option) any later version.
+--
+-- dromozoa-json is distributed in the hope that it will be useful,
+-- but WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-- GNU General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with dromozoa-json.  If not, see <http://www.gnu.org/licenses/>.
+
+local result, cjson = pcall(require, "cjson")
+if result then
+  return cjson
+else
+  return require "dromozoa.json.pure"
+end
+-- ===========================================================================
+end)()
+-- This file was auto-generated.
+package.loaded["dromozoa.shlex"] = (function ()
+-- ===========================================================================
+-- dromozoa.shlex
+-- ===========================================================================
+-- Copyright (C) 2015 Tomoyuki Fujimori <moyu@dromozoa.com>
+--
+-- This file is part of dromozoa-shlex.
+--
+-- dromozoa-shlex is free software: you can redistribute it and/or modify
+-- it under the terms of the GNU General Public License as published by
+-- the Free Software Foundation, either version 3 of the License, or
+-- (at your option) any later version.
+--
+-- dromozoa-shlex is distributed in the hope that it will be useful,
+-- but WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-- GNU General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with dromozoa-shlex.  If not, see <http://www.gnu.org/licenses/>.
+
+local utf8 = require "dromozoa.utf8"
+
+local SQ = 0x27 -- U+0027 APORSTROPHE
+local DQ = 0x22 -- U+0022 QUOTATION MARK
+local SP = 0x20 -- U+0020 SPACE
+local HT = 0x09 -- U+0009 CHARACTER TABULATION
+local LF = 0x0A -- U+000A LINE FEED (LF)
+local CR = 0x0D -- U+000D CARRIAGE RETURN (CR)
+local BS = 0x5C -- U+005C REVERSE SOLIDUS
+
+local function split(s)
+  local token
+  local state
+  local escape = false
+  local result = {}
+  for p, c in utf8.codes(s) do
+    local s = utf8.char(c)
+    if state == SQ then
+      if c == SQ then
+        state = nil
+      else
+        token[#token + 1] = s
+      end
+    elseif state == DQ then
+      if escape then
+        if c == DQ or c == BS then
+          token[#token + 1] = s
+        else
+          token[#token + 1] = "\\"
+          token[#token + 1] = s
+        end
+        escape = false
+      else
+        if c == DQ then
+          state = nil
+        elseif c == BS then
+          escape = true
+        else
+          token[#token + 1] = s
+        end
+      end
+    else
+      if escape then
+        token[#token + 1] = s
+        escape = false
+      else
+        if c == SP or c == HT or c == LF or c == CR then
+          if token ~= nil then
+            result[#result + 1] = table.concat(token)
+            token = nil
+          end
+        else
+          if token == nil then token = {} end
+          if c == SQ then
+            state = SQ
+          elseif c == DQ then
+            state = DQ
+          elseif c == BS then
+            escape = true
+          else
+            token[#token + 1] = s
+          end
+        end
+      end
+    end
+  end
+
+  if state ~= nil then
+    error "no closing quotation"
+  end
+  if escape then
+    error "no escaped character"
+  end
+
+  if token ~= nil then
+    result[#result + 1] = table.concat(token)
+  end
+  return result
+end
+
+return {
+  split = split;
+  version = function () return "1.1" end;
+}
+-- ===========================================================================
+end)()
+local json = require "dromozoa.json"
+local shlex = require "dromozoa.shlex"
+
+local format = string.format
+
+local PATH = os.getenv("PATH")
+if PATH == nil or #PATH == 0 then
+  PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+else
+  PATH = PATH .. ":/usr/bin:/bin:/usr/sbin:/sbin"
+end
+
+local function execute(command)
+  local result = os.execute(command)
+  if type(result) == "boolean" then
+    return result
+  else
+    return result == 0
+  end
+end
+
+local function iptables_parse_line(line)
+  local i = 1
+  local _1
+  local _2
+
+  local function scan(pattern)
+    local a, b, c, d = line:find("^" .. pattern, i)
+    if b == nil then
+      return false
+    else
+      i = b + 1
+      _1 = c
+      _2 = d
+      return true
+    end
+  end
+
+  if scan "#%s*(.*)" then
+    return {
+      mode = "comment";
+      comment = _1;
+    }
+  elseif scan "%*([^%s]*)" then
+    return {
+      mode = "table";
+      table = _1;
+    }
+  elseif scan "%:(.-) (.-) " then
+    return {
+      mode = "policy";
+      chain = _1;
+      policy = _2;
+    }
+  elseif scan "%-A (.-) " then
+    local result = {
+      mode = "append";
+      chain = _1;
+      address_or_interface = false;
+      match = false;
+    }
+    while i <= #line do
+      local j = i
+      local invert = false
+      if scan "! " then
+        invert = true
+      end
+      if scan "%-s (.-) " then
+        result.address_or_interface = true
+        result.source = {
+          invert = invert;
+          address = _1;
+        }
+      elseif scan "%-d (.-) " then
+        result.address_or_interface = true
+        result.destination = {
+          invert = invert;
+          address = _1;
+        }
+      elseif scan "%-i (.-) " then
+        result.address_or_interface = true
+        result.in_interface = {
+          invert = invert;
+          interface = _1;
+        }
+      elseif scan "%-o (.-) " then
+        result.address_or_interface = true
+        result.out_interface = {
+          invert = invert;
+          interface = _1;
+        }
+      elseif scan "%-p (.-) " then
+        result.protocol = {
+          invert = invert;
+          protocol = _1;
+        }
+      else
+        i = j
+        break
+      end
+    end
+    local t = {}
+    for j in line:sub(i):gmatch("[^%s]+") do
+      t[#t + 1] = j
+    end
+    result.match = false
+    for j = 1, #t do
+      local a, b, c, d = t[j], t[j + 1], t[j + 2], t[j + 3]
+      if a == "-j" then
+        result.jump = b
+      elseif a == "--reject-with" then
+        result.reject_with = b
+      elseif a == "-m" then
+        result.match = true
+        if b == "state" and c == "--state" then
+          result.match_state = d
+        elseif c == "--dport" then
+          local min, max = d:match("^(%d+):(%d+)$")
+          if min == nil then
+            min = d:match("^%d+$")
+            if min == nil then
+              error "could not parse"
+            end
+            max = min
+          end
+          result.match_dport = {
+            name = b;
+            min = tonumber(min);
+            max = tonumber(max);
+          }
+        end
+      end
+    end
+    return result
+  elseif scan "COMMIT" then
+    return {
+      mode = "commit";
+    }
+  else
+    error "could not parse"
+  end
+end
+
+local function iptables_parse()
+  local result = {}
+  local table
+  local n = 0
+
+  local handle = assert(io.popen(format([[env PATH="%s" iptables-save]], PATH)))
+  for i in handle:lines() do
+    local v = iptables_parse_line(i)
+    if v.mode == "table" then
+      table = v.table
+      result[table] = {}
+    elseif v.mode == "policy" then
+      result[table][v.chain] = {
+        policy = v.policy;
+        append = {};
+      }
+    elseif v.mode == "append" then
+      n = n + 1
+      local t = result[table][v.chain].append
+      t[#t + 1] = v
+    end
+  end
+  handle:close()
+
+  return result, n
+end
+
+local function iptables_evaluate(data, chain, protocol, port)
+  local t = data[chain].append
+  for i = 1, #t do
+    local v = t[i]
+    if not v.address_or_interface then
+      local pass
+      if v.protocol == nil then
+        pass = true
+      else
+        if v.protocol.invert then
+          pass = v.protocol.protocol ~= protocol
+        else
+          pass = v.protocol.protocol == protocol
+        end
+      end
+      if pass then
+        local mode
+        if v.match_dport == nil then
+          if not v.match then
+            mode = "no_match"
+          end
+        elseif v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max then
+          if v.match_dport.min == v.match_dport.max then
+            mode = "match_dport_single"
+          else
+            mode = "match_dport_range"
+          end
+        end
+        if mode then
+          if data[v.jump] == nil then
+            return v.jump, chain, i, mode
+          else
+            return iptables_evaluate(data, v.jump, protocol, port)
+          end
+        end
+      end
+    end
+  end
+  return data[chain].policy, chain, 0
+end
+
+local function iptables_insert(chain, i, protocol, port, target)
+  if protocol == "tcp" then
+    assert(execute(format([[env PATH="%s" iptables -I "%s" %d -p tcp -m state --state NEW -m tcp --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, port, target)))
+  else
+    assert(execute(format([[env PATH="%s" iptables -I "%s" %d -p "%s" -m "%s" --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, protocol, protocol, port, target)))
+  end
+end
+
+local function iptables_remove(chain, i)
+  assert(execute(format([[env PATH="%s" iptables -D "%s" %d >/dev/null 2>&1]], PATH, chain, i)))
+end
+
+local function get_service_by_name(name)
+  local result = {}
+
+  local handle = assert(io.open("/etc/services"))
+  for i in handle:lines() do
+    local line = i:gsub("#.*", "")
+    local a, b, s_name, s_port, s_protocol = line:find("^([^%s]+)%s+(%d+)/([^%s]+)%s*")
+    if b ~= nil then
+      local s = {
+        port = tonumber(s_port);
+        protocol = s_protocol;
+      }
+      if s_name == name then
+        result[#result + 1] = s
+      end
+      for j in line:sub(b + 1):gmatch("[^%s]+") do
+        if j == name then
+          result[#result + 1] = s
+        end
+      end
+    end
+  end
+  handle:close()
+
+  if #result == 0 then
+    return nil
+  else
+    return result
+  end
+end
+
+local function get_euid()
+  local handle = assert(io.popen(format([[env PATH="%s" id -u -r]], PATH)))
+  local euid = handle:read("*n")
+  handle:close()
+  return euid
+end
+
+local string_to_boolean = {}
+do
+  local t = { "yes", "on", "1", "true" }
+  for i = 1, #t do
+    string_to_boolean[t[i]] = true
+  end
+  local t = { "no", "off", "0", "false" }
+  for i = 1, #t do
+    string_to_boolean[t[i]] = false
+  end
+end
+
+local result, message = pcall(function (filename)
+  local euid = get_euid()
+  if euid ~= 0 then
+    error "must be run as root"
+  end
+
+  local handle
+  if filename == nil then
+    handle = io.stdin
+  else
+    handle = assert(io.open(filename))
+  end
+  local content = handle:read("*a")
+  handle:close()
+
+  local service
+  local permanent
+  local state
+
+  local list = shlex.split(content)
+  for i = 1, #list do
+    local item = list[i]
+    local k, v = item:match("^([^=]+)=(.*)")
+    if k == "service" then
+      service = get_service_by_name(v)
+      if service == nil then
+        error("bad argument " .. item)
+      end
+    elseif k == "port" then
+      local port, protocol = v:match("^(%d+)/(.*)")
+      if port == nil then
+        error("bad argument " .. item)
+      end
+      service = { {
+        port = tonumber(port);
+        protocol = protocol;
+      } }
+    elseif k == "permanent" then
+      permanent = string_to_boolean[v]
+      if permanent == nil then
+        error("bad argument " .. item)
+      end
+    elseif k == "state" then
+      if v == "enabled" or v == "disabled" then
+        state = v
+      else
+        error("bad argument " .. item)
+      end
+    else
+      error("bad argument " .. item)
+    end
+  end
+
+  if service == nil then
+    error "service or port is required"
+  end
+  if permanent == nil then
+    error "permanent is required"
+  end
+  if state == nil then
+    error "state is required"
+  end
+
+  local changed = false
+
+  local iptables, n = iptables_parse()
+  if n == 0 then
+    assert(execute(format([[env PATH="%s" lokkit -q --enabled -p 22/tcp -f >/dev/null 2>&1]], PATH)))
+    changed = true
+    iptables = iptables_parse()
+  end
+
+  for i = 1, #service do
+    local v = service[i]
+    local target, chain, j, mode = iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port)
+    if state == "enabled" and target == "REJECT" then
+      local t = iptables.filter[chain].append[j]
+      if mode == "match_dport_single" then
+        iptables_remove(chain, j)
+      else
+        iptables_insert(chain, j, v.protocol, v.port, "ACCEPT")
+      end
+      changed = true
+      iptables = iptables_parse()
+    elseif state == "disabled" and target == "ACCEPT" then
+      local t = iptables.filter[chain].append[j]
+      if mode == "match_dport_single" then
+        iptables_remove(chain, j)
+      else
+        iptables_insert(chain, j, v.protocol, v.port, "REJECT")
+      end
+      changed = true
+      iptables = iptables_parse()
+    end
+  end
+
+  if permanent and changed then
+    assert(execute(format([[env PATH="%s" service iptables save >/dev/null 2>&1]], PATH)))
+  end
+
+  io.write(json.encode {
+    changed = changed;
+  }, "\n")
+end, ...)
+
+if not result then
+  io.write(json.encode {
+    failed = true;
+    msg = message;
+  }, "\n")
+end
