@@ -184,21 +184,21 @@ local function iptables_evaluate(data, chain, protocol, port)
         end
       end
       if pass then
-        local pass
+        local mode
         if v.match_dport == nil then
           if not v.match then
-            pass = "no_match"
+            mode = "no_match"
           end
         elseif v.match_dport.name == protocol and v.match_dport.min <= port and port <= v.match_dport.max then
           if v.match_dport.min == v.match_dport.max then
-            pass = "match_dport_single"
+            mode = "match_dport_single"
           else
-            pass = "match_dport_range"
+            mode = "match_dport_range"
           end
         end
-        if pass then
+        if mode then
           if data[v.jump] == nil then
-            return v.jump, chain, i, pass
+            return v.jump, chain, i, mode
           else
             return iptables_evaluate(data, v.jump, protocol, port)
           end
@@ -345,23 +345,25 @@ local result, message = pcall(function (filename)
 
   for i = 1, #service do
     local v = service[i]
-    local target, chain, j, pass = iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port)
+    local target, chain, j, mode = iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port)
     if state == "enabled" and target == "REJECT" then
       local t = iptables.filter[chain].append[j]
-      if pass == "match_dport_single" then
+      if mode == "match_dport_single" then
         iptables_remove(chain, j)
       else
         iptables_insert(chain, j, v.protocol, v.port, "ACCEPT")
       end
       changed = true
+      iptables = iptables_parse()
     elseif state == "disabled" and target == "ACCEPT" then
       local t = iptables.filter[chain].append[j]
-      if pass == "match_dport_single" then
+      if mode == "match_dport_single" then
         iptables_remove(chain, j)
       else
         iptables_insert(chain, j, v.protocol, v.port, "REJECT")
       end
       changed = true
+      iptables = iptables_parse()
     end
   end
 
