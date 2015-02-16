@@ -1,11 +1,22 @@
 local json = require "dromozoa.json"
 local shlex = require "dromozoa.shlex"
 
+local format = string.format
+
 local PATH = os.getenv("PATH")
 if PATH == nil or #PATH == 0 then
   PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 else
   PATH = PATH .. ":/usr/bin:/bin:/usr/sbin:/sbin"
+end
+
+local function execute(command)
+  local a, b = os.execute(command)
+  if type(a) == "boolean" then
+    assert(a, b)
+  else
+    assert(a == 0)
+  end
 end
 
 local function iptables_parse_line(line)
@@ -132,9 +143,10 @@ end
 
 local function iptables_parse()
   local result = {}
-
-  local handle = assert(io.popen(string.format([[env PATH="%s" iptables-save]], PATH)))
   local table
+  local n = 0
+
+  local handle = assert(io.popen(format([[env PATH="%s" iptables-save]], PATH)))
   for i in handle:lines() do
     local v = iptables_parse_line(i)
     if v.mode == "table" then
@@ -146,13 +158,14 @@ local function iptables_parse()
         append = {};
       }
     elseif v.mode == "append" then
+      n = n + 1
       local t = result[table][v.chain].append
       t[#t + 1] = v
     end
   end
   handle:close()
 
-  return result
+  return result, n
 end
 
 local function iptables_evaluate(data, chain, protocol, port)
@@ -190,6 +203,18 @@ local function iptables_evaluate(data, chain, protocol, port)
   return data[chain].policy, chain, 0
 end
 
+local function iptables_insert(chain, i, protocol, port, target)
+  if protocol == "tcp" then
+    execute(format([[env PATH="%s" iptables -I "%s" %d -p tcp -m state --state NEW -m tcp --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, port, target))
+  else
+    execute(format([[env PATH="%s" iptables -I "%s" %d -p "%s" -m "%s" --dport %d -j "%s" >/dev/null 2>&1]], PATH, chain, i, protocol, protocol, port, target))
+  end
+end
+
+local function iptables_remove(chain, i)
+    execute(format([[env PATH="%s" iptables -D "%s" %d >/dev/null 2>&1]], PATH, chain, i))
+end
+
 local function get_service_by_name(name)
   local result = {}
 
@@ -222,7 +247,7 @@ local function get_service_by_name(name)
 end
 
 local function get_euid()
-  local handle = assert(io.popen(string.format([[env PATH="%s" id -u -r]], PATH)))
+  local handle = assert(io.popen(format([[env PATH="%s" id -u -r]], PATH)))
   local euid = handle:read("*n")
   handle:close()
   return euid
@@ -303,17 +328,45 @@ local result, message = pcall(function (filename)
     error "state is required"
   end
 
-  local iptables = iptables_parse()
-  print(json.encode(iptables))
+  local changed = false
+
+  local iptables, n = iptables_parse()
+  if n == 0 then
+    execute(format([[env PATH="%s" lokkit -q --enabled -p 22/tcp -f >/dev/null 2>&1]], PATH))
+    changed = true
+    iptables = iptables_parse()
+  end
 
   for i = 1, #service do
     local v = service[i]
-    print(iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port))
+    local target, chain, j = iptables_evaluate(iptables.filter, "INPUT", v.protocol, v.port)
+    if state == "enabled" and target == "REJECT" then
+      local t = iptables.filter[chain].append[j]
+      if t.match_dport ~= nil and t.match_dport.name == v.protocol and t.match_dport.min == v.port and t.match_dport.max == v.port then
+        iptables_remove(chain, j)
+      else
+        iptables_insert(chain, j, v.protocol, v.port, "ACCEPT")
+      end
+      changed = true
+    elseif state == "disabled" and target == "ACCEPT" then
+      local t = iptables.filter[chain].append[j]
+      if t.match_dport ~= nil and t.match_dport.name == v.protocol and t.match_dport.min == v.port and t.match_dport.max == v.port then
+        iptables_remove(chain, j)
+      else
+        iptables_insert(chain, j, v.protocol, v.port, "REJECT")
+      end
+      changed = true
+    end
+  end
+
+  if permanent and changed then
+    execute(format([[env PATH="%s" service iptables save >/dev/null 2>&1]], PATH))
   end
 
   print("service", json.encode(service))
   print("permanent", permanent)
   print("state", state)
+  print("changed", changed)
 end, ...)
 
 if not result then
